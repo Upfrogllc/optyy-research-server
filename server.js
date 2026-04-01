@@ -3,37 +3,30 @@ const app = express()
 
 app.use(express.json())
 
-// Allow requests from your Netlify frontend
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
   if (req.method === 'OPTIONS') return res.sendStatus(200)
   next()
 })
 
-app.post('/research', async (req, res) => {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' })
-
-  const { research_company } = req.body
-  if (!research_company) return res.status(400).json({ error: 'research_company is required' })
-
-  try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'anthropic-version': '2023-06-01',
-        'x-api-key': apiKey,
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5-20250929',
-        max_tokens: 2000,
-        tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 4 }],
-        messages: [{
-          role: 'user',
-          content: `Research the company "${research_company}". Search for: (1) owner/CEO name and background, (2) customer reviews across multiple years, (3) their website pricing page, (4) the local market they serve. Return ONLY this JSON with no markdown or extra text:
+// ── Shared: run AI research on a company name ────────────────────────────────
+async function runResearch(companyName, anthropicKey) {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+      'x-api-key': anthropicKey,
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-5-20250929',
+      max_tokens: 2000,
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 4 }],
+      messages: [{
+        role: 'user',
+        content: `Research the company "${companyName}". Search for: (1) owner/CEO name and background, (2) customer reviews across multiple years, (3) their website pricing page, (4) the local market they serve. Return ONLY this JSON with no markdown or extra text:
 {
   "industry": "what they do and estimated size",
   "ownership": "privately held or public, owner name if found",
@@ -52,30 +45,194 @@ app.post('/research', async (req, res) => {
   "company_struggles": "real problems this business appears to face based on all research",
   "email_angle": "personalized 2-3 sentence OPTYy cold email opener referencing owner by first name and a specific struggle"
 }`
-        }]
-      })
+      }]
     })
+  })
 
-    if (!response.ok) {
-      const err = await response.text()
-      return res.status(500).json({ error: `Anthropic ${response.status}`, detail: err })
-    }
+  if (!response.ok) {
+    const err = await response.text()
+    throw new Error(`Anthropic ${response.status}: ${err}`)
+  }
 
-    const data = await response.json()
-    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
-    const match = text.match(/\{[\s\S]*\}/)
+  const data = await response.json()
+  const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
+  const match = text.match(/\{[\s\S]*\}/)
+  if (!match) throw new Error('No JSON in response')
+  return JSON.parse(match[0])
+}
 
-    if (!match) return res.status(500).json({ error: 'No JSON in response', raw: text.slice(0, 500) })
+// ── Shared: build note body ──────────────────────────────────────────────────
+function buildNote(companyName, d) {
+  const now = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+  return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OPTYy AI PROSPECT INTELLIGENCE
+Researched: ${now}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    const result = JSON.parse(match[0])
+🏢 COMPANY: ${companyName}
+
+─────────────────────────────────
+📊 INDUSTRY & SIZE
+${d.industry || 'N/A'}
+
+─────────────────────────────────
+🔐 OWNERSHIP
+${d.ownership || 'N/A'}
+
+─────────────────────────────────
+👤 OWNER BACKGROUND
+${d.owner_profiles || 'N/A'}
+
+─────────────────────────────────
+🎯 OWNER INTERESTS & HOBBIES
+${d.owner_hobbies || 'N/A'}
+
+─────────────────────────────────
+👨‍👩‍👧 FAMILY (PUBLIC INFO ONLY)
+${d.owner_family || 'N/A'}
+
+─────────────────────────────────
+⚠️ PAIN POINTS
+${d.pain_points || 'N/A'}
+
+─────────────────────────────────
+🛠️ TECH STACK
+${d.tech_stack || 'N/A'}
+
+─────────────────────────────────
+📰 RECENT NEWS
+${d.recent_news || 'N/A'}
+
+─────────────────────────────────
+👎 NEGATIVE REVIEWS
+${d.reviews_negative || 'N/A'}
+
+─────────────────────────────────
+👍 POSITIVE REVIEWS
+${d.reviews_positive || 'N/A'}
+
+─────────────────────────────────
+📈 REVIEW TREND
+${d.reviews_trend || 'N/A'}
+
+─────────────────────────────────
+💰 ONLINE PRICING
+${d.online_pricing || 'N/A'}
+
+─────────────────────────────────
+🏘️ MARKET POPULATION
+${d.market_population || 'N/A'}
+
+─────────────────────────────────
+⚔️ MARKET COMPETITION
+${d.market_competition || 'N/A'}
+
+─────────────────────────────────
+🚨 COMPANY STRUGGLES
+${d.company_struggles || 'N/A'}
+
+─────────────────────────────────
+✉️ EMAIL ANGLE
+${d.email_angle || 'N/A'}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Generated by OPTYy Prospect Research
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+}
+
+// ── GHL helpers ──────────────────────────────────────────────────────────────
+async function ghlPut(path, payload, ghlKey) {
+  const res = await fetch(`https://services.leadconnectorhq.com${path}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${ghlKey}`,
+      'Version': '2021-07-28',
+    },
+    body: JSON.stringify(payload)
+  })
+  return res
+}
+
+async function ghlPost(path, payload, ghlKey) {
+  const res = await fetch(`https://services.leadconnectorhq.com${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${ghlKey}`,
+      'Version': '2021-07-28',
+    },
+    body: JSON.stringify(payload)
+  })
+  return res
+}
+
+// ── POST /research — manual research from the OPTYy app ─────────────────────
+app.post('/research', async (req, res) => {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY
+  if (!anthropicKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' })
+
+  const { research_company } = req.body
+  if (!research_company) return res.status(400).json({ error: 'research_company is required' })
+
+  try {
+    const result = await runResearch(research_company, anthropicKey)
     res.json({ result })
-
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
 })
 
-// Health check
+// ── POST /webhook — GHL fires this when a new contact is created ─────────────
+// Set this URL in your GHL Workflow: https://optyy-research-server-production.up.railway.app/webhook
+app.post('/webhook', async (req, res) => {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY
+  const ghlKey       = process.env.GHL_API_KEY
+  const locationId   = process.env.GHL_LOCATION_ID
+
+  if (!anthropicKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' })
+  if (!ghlKey)       return res.status(500).json({ error: 'GHL_API_KEY not set' })
+  if (!locationId)   return res.status(500).json({ error: 'GHL_LOCATION_ID not set' })
+
+  // GHL webhook payload
+  const { contact_id, company_name, first_name, last_name, email, phone } = req.body
+  const contactId  = contact_id || req.body.id || req.body.contactId
+  const companyName = company_name || req.body.companyName || `${first_name || ''} ${last_name || ''}`.trim()
+
+  if (!contactId)   return res.status(400).json({ error: 'No contact_id in webhook payload' })
+  if (!companyName) return res.status(400).json({ error: 'No company name found in webhook payload' })
+
+  // Respond immediately so GHL doesn't time out waiting
+  res.json({ status: 'received', contactId, companyName })
+
+  // Run research async after responding
+  try {
+    console.log(`[webhook] Researching: ${companyName} (${contactId})`)
+    const data = await runResearch(companyName, anthropicKey)
+
+    // Update the contact record with research data
+    await ghlPut(`/contacts/${contactId}`, {
+      customFields: [
+        { id: 'industry',    value: data.industry    || '' },
+        { id: 'pain_points', value: data.pain_points || '' },
+        { id: 'email_angle', value: data.email_angle || '' },
+      ],
+      tags: ['oiptyy-researched']
+    }, ghlKey)
+
+    // Add structured research note
+    await ghlPost(`/contacts/${contactId}/notes/`, {
+      body: buildNote(companyName, data),
+      userId: ''
+    }, ghlKey)
+
+    console.log(`[webhook] Done: ${companyName}`)
+  } catch (e) {
+    console.error(`[webhook] Error researching ${companyName}:`, e.message)
+  }
+})
+
+// ── Health check ─────────────────────────────────────────────────────────────
 app.get('/', (req, res) => res.json({ status: 'OPTYy Research Server running' }))
 
 const PORT = process.env.PORT || 3000
