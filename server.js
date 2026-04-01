@@ -11,53 +11,6 @@ app.use((req, res, next) => {
   next()
 })
 
-// ── Meta Ad Library search ───────────────────────────────────────────────────
-async function searchMetaAds(companyName) {
-  try {
-    // Meta Ad Library public URL — no auth needed for search
-    const query = encodeURIComponent(companyName)
-    const url = `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=US&q=${query}&search_type=keyword_unordered`
-
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-      }
-    })
-
-    if (!res.ok) return { found: false, note: `Meta Ad Library returned ${res.status}` }
-
-    const html = await res.text()
-
-    // Check for ad results indicators
-    const hasAds = html.includes('active_ads') || html.includes('"ad_archive_id"') || html.includes('adArchiveID')
-    const noAds  = html.includes('No ads match') || html.includes('no ads') || html.length < 5000
-
-    if (noAds || !hasAds) {
-      return { found: false, running: false, note: `No active ads found for "${companyName}" in Meta Ad Library` }
-    }
-
-    // Try to extract ad count and page name
-    const pageMatch   = html.match(/"page_name":"([^"]+)"/)
-    const countMatch  = html.match(/"total_count":(\d+)/)
-    const pageName    = pageMatch  ? pageMatch[1]  : companyName
-    const adCount     = countMatch ? countMatch[1] : 'unknown number of'
-
-    return {
-      found: true,
-      running: true,
-      pageName,
-      adCount,
-      libraryUrl: url,
-      note: `✅ RUNNING META ADS — Page: "${pageName}" has ${adCount} ads active in Meta Ad Library. View at: ${url}`
-    }
-
-  } catch (e) {
-    return { found: false, note: `Meta Ad Library check failed: ${e.message}` }
-  }
-}
-
 // ── In-memory activity log (last 100 events) ─────────────────────────────────
 const activityLog = []
 function logActivity(entry) {
@@ -74,10 +27,7 @@ async function runResearch(companyName, anthropicKey, context = {}) {
     context.city   ? `city: ${context.city}` : '',
   ].filter(Boolean).join(', ')
 
-  // ── Step 1a: Check Meta Ad Library ──────────────────────────────────────
-  const metaResult = await searchMetaAds(companyName)
-
-  // ── Step 1b: Web search pass — gather raw intelligence ───────────────────
+  // ── Step 1: Web search pass — gather raw intelligence ────────────────────
   const searchRes = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': anthropicKey },
@@ -90,16 +40,14 @@ async function runResearch(companyName, anthropicKey, context = {}) {
         role: 'user',
         content: `Research this contractor: "${companyName}"${contextHints ? ` (${contextHints})` : ''}
 
-Meta Ad Library check already completed: ${metaResult.note}
-
-Run these additional searches:
+Run these searches:
 1. "${companyName}" owner OR founder OR president — find the owner name
-2. "${companyName}" reviews Google Yelp BBB — find customer feedback
-3. "${companyName}" website — check for pricing transparency and services
+2. "${companyName}" reviews Google Yelp BBB — find customer feedback  
+3. "${companyName}" website — check pricing transparency and services
 4. [owner name] background hobbies LinkedIn Facebook — find personal details
-5. "${companyName}" Google ads LSA marketing agency
+5. site:facebook.com/ads/library "${companyName}" — check Meta Ad Library for active ads. Also search "${companyName}" Google PPC ads OR LSA OR marketing agency
 
-Report everything found in detail. Include direct quotes from reviews. Be specific about locations, names, dates, and numbers.`
+Report everything found in detail. Include direct review quotes. Note specifically: are they running Meta/Facebook ads, Google PPC, or LSA? Name any marketing agencies found.`
       }]
     })
   })
@@ -119,9 +67,6 @@ Report everything found in detail. Include direct quotes from reviews. Be specif
       messages: [{
         role: 'user',
         content: `Research notes for "${companyName}":
-
-META AD LIBRARY: ${metaResult.note}
-${metaResult.running ? `Meta Ad Library URL: ${metaResult.libraryUrl}` : ''}
 
 ${notes}
 
@@ -144,7 +89,7 @@ Return ONLY valid JSON starting with { and ending with }. No markdown, no explan
   "market_population": "city/region name, estimated households, service radius",
   "market_competition": "2-3 named local competitors, market saturation assessment",
   "company_struggles": "real specific problems this business faces right now",
-  "marketing_current": "Meta Ads: Yes/No (use the Meta Ad Library result above), Google PPC: Yes/No, LSA: Yes/No — be specific about what was confirmed",
+  "marketing_current": "Meta/Facebook Ads: Yes/No, Google PPC: Yes/No, LSA: Yes/No — based on what was found in searches. Be specific.",
   "marketing_agencies": "agency names found, or inferred based on ad presence",
   "email_1_subject": "specific curiosity-driven subject line referencing something real found in research",
   "email_1": "3-4 paragraph pre-call confirmation email. Open with a specific insight about their business. Explain Upfrog (demand generation via price transparency + paid social for HVAC/roofing/garage doors/water treatment/generators). Connect to their specific struggles. Confirm call and build anticipation. Sign off personally by owner first name. No fluff.",
