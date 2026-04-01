@@ -20,7 +20,7 @@ function logActivity(entry) {
 }
 
 // ── Shared: run AI research ───────────────────────────────────────────────────
-async function runResearch(companyName, anthropicKey) {
+async function runResearch(companyName, anthropicKey, context = {}) {
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -34,7 +34,7 @@ async function runResearch(companyName, anthropicKey) {
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 4 }],
       messages: [{
         role: 'user',
-        content: `Research the company "${companyName}". Search for: (1) owner/CEO name and background, (2) customer reviews across multiple years, (3) their website pricing and marketing presence, (4) the local market they serve, (5) any current or past marketing activity — paid ads, PPC, LSA, Meta ads, marketing agencies. Return ONLY this JSON with no markdown or extra text:
+        content: `Research the company "${companyName}"${context.domain ? ` (website: ${context.domain})` : ''}${context.phone ? ` (phone: ${context.phone})` : ''}${context.city ? ` (location: ${context.city})` : ''}. Use the website domain or phone number to identify the exact right company if the name is common. Search for: (1) owner/CEO name and background, (2) customer reviews across multiple years, (3) their website pricing and marketing presence, (4) the local market they serve, (5) any current or past marketing activity — paid ads, PPC, LSA, Meta ads, marketing agencies. Return ONLY this JSON with no markdown or extra text:
 {
   "industry": "what they do, their trade/service type, and estimated annual revenue",
   "ownership": "privately held or public, owner full name if found and source",
@@ -59,7 +59,9 @@ async function runResearch(companyName, anthropicKey) {
   "email_2": "Write a full email FROM Upfrog TO the owner that kindly and professionally lets them know Upfrog is built for contractors doing over $3M in annual revenue or those ready to invest at least $6,000/month in demand generation. The email should: (1) Thank them genuinely for their time and interest. (2) Be honest that Upfrog may not be the right fit right now based on where they are — do NOT make them feel bad or small. (3) Reference 1 specific positive thing you found about their business to show genuine respect. (4) Briefly explain what Upfrog is and the investment level so they understand the standard. (5) Leave the door open — if they grow or are ready to invest at that level, Upfrog would love to reconnect. (6) Offer 1 genuinely helpful tip or resource relevant to their current situation — a free tool, strategy, or advice based on what you found. Tone: warm, generous, zero pressure. This email should make them like Upfrog even more after reading it.",
   "email_3_subject": "A subject line for a follow-up email sent 24 hours before the scheduled call — creates urgency and excitement.",
   "email_3": "Write a short 24-hour reminder email that: (1) Reminds them of the upcoming discovery call tomorrow. (2) Teases 2-3 specific things Upfrog will show them on the call based on what you found about their business and market. (3) Includes a one-liner that makes them feel like this call was made for their exact situation. (4) Keeps it under 150 words. High energy, punchy, confident."
-}`
+}
+
+IMPORTANT: You MUST return ONLY the JSON object above. No introduction, no explanation, no markdown, no code blocks. Start your response with { and end with }.`
       }]
     })
   })
@@ -196,11 +198,15 @@ app.post('/research', async (req, res) => {
   const anthropicKey = process.env.ANTHROPIC_API_KEY
   if (!anthropicKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' })
 
-  const { research_company } = req.body
+  const { research_company, email, phone } = req.body
   if (!research_company) return res.status(400).json({ error: 'research_company is required' })
 
+  // Extract domain from email for better company identification
+  const domain = email ? email.split('@')[1] : null
+  const context = { domain, phone }
+
   try {
-    const result = await runResearch(research_company, anthropicKey)
+    const result = await runResearch(research_company, anthropicKey, context)
     res.json({ result })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -240,7 +246,9 @@ app.post('/webhook', async (req, res) => {
     try {
       logActivity({ status: 'researching', company: companyName, contactId, email, phone, message: 'AI research in progress...' })
 
-      const data = await runResearch(companyName, anthropicKey)
+      const domain = email ? email.split('@')[1] : null
+      const city   = payload.city || payload.contact?.city || ''
+      const data = await runResearch(companyName, anthropicKey, { domain, phone, city })
 
       // Write research note to GHL contact
       await ghlRequest('POST', `/contacts/${contactId}/notes/`, {
