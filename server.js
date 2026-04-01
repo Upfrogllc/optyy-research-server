@@ -30,7 +30,7 @@ async function runResearch(companyName, anthropicKey) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-5-20250929',
-      max_tokens: 2000,
+      max_tokens: 4000,
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 4 }],
       messages: [{
         role: 'user',
@@ -71,9 +71,26 @@ async function runResearch(companyName, anthropicKey) {
 
   const data = await response.json()
   const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
-  const match = text.match(/\{[\s\S]*\}/)
-  if (!match) throw new Error('No JSON in response')
-  return JSON.parse(match[0])
+
+  // Strip markdown code blocks if present
+  const stripped = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+
+  // Find the outermost JSON object
+  const start = stripped.indexOf('{')
+  const end   = stripped.lastIndexOf('}')
+  if (start === -1 || end === -1) throw new Error('No JSON in response: ' + stripped.slice(0, 200))
+
+  const jsonStr = stripped.slice(start, end + 1)
+  try {
+    return JSON.parse(jsonStr)
+  } catch (e) {
+    // Try to salvage by replacing common issues
+    const fixed = jsonStr
+      .replace(/,\s*}/g, '}')   // trailing commas
+      .replace(/,\s*]/g, ']')   // trailing commas in arrays
+      .replace(/\n/g, '\\n')  // unescaped newlines inside strings
+    return JSON.parse(fixed)
+  }
 }
 
 // ── Shared: build note body ───────────────────────────────────────────────────
