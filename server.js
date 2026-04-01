@@ -34,24 +34,31 @@ async function runResearch(companyName, anthropicKey) {
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 4 }],
       messages: [{
         role: 'user',
-        content: `Research the company "${companyName}". Search for: (1) owner/CEO name and background, (2) customer reviews across multiple years, (3) their website pricing page, (4) the local market they serve. Return ONLY this JSON with no markdown or extra text:
+        content: `Research the company "${companyName}". Search for: (1) owner/CEO name and background, (2) customer reviews across multiple years, (3) their website pricing and marketing presence, (4) the local market they serve, (5) any current or past marketing activity — paid ads, PPC, LSA, Meta ads, marketing agencies. Return ONLY this JSON with no markdown or extra text:
 {
-  "industry": "what they do and estimated size",
-  "ownership": "privately held or public, owner name if found",
-  "owner_profiles": "owner background and location if found",
-  "owner_hobbies": "owner interests or hobbies if found online",
-  "owner_family": "spouse or children if publicly mentioned",
-  "pain_points": "3 operational challenges this business likely faces",
-  "tech_stack": "software tools they likely use",
-  "recent_news": "any notable news in past 12 months",
-  "reviews_negative": "common complaints from reviews if found",
-  "reviews_positive": "common praise from reviews if found",
-  "reviews_trend": "is review sentiment improving or declining over time? Compare older vs newer reviews. State: Improving / Declining / Stable and explain why.",
-  "online_pricing": "does the company show transparent pricing on their website? Yes or No, and describe what is visible.",
-  "market_population": "estimate households or businesses in the geographic market they serve. Include city/region and population.",
-  "market_competition": "how competitive is their local market? Name 2-3 direct local competitors if found. Is market saturated, growing, or underserved?",
-  "company_struggles": "real problems this business appears to face based on all research",
-  "email_angle": "personalized 2-3 sentence OPTYy cold email opener referencing owner by first name and a specific struggle"
+  "industry": "what they do, their trade/service type, and estimated annual revenue",
+  "ownership": "privately held or public, owner full name if found and source",
+  "owner_profiles": "owner background: city, education, how long in business, career history",
+  "owner_hobbies": "owner personal interests found online: sports, hobbies, church, charity, teams",
+  "owner_family": "spouse name, children if publicly mentioned — public info only",
+  "pain_points": "3 specific operational challenges this contractor likely faces right now",
+  "tech_stack": "software tools they use: CRM, scheduling, marketing, communication",
+  "recent_news": "notable news, awards, expansions, or problems in past 12 months",
+  "reviews_negative": "most common complaints from Google, Yelp, BBB. Include 1-2 quoted snippets.",
+  "reviews_positive": "most common praise themes from reviews",
+  "reviews_trend": "is sentiment improving or declining? Compare old vs new reviews. State: Improving / Declining / Stable and why.",
+  "online_pricing": "do they show transparent pricing on their website? Yes or No. Describe exactly what pricing info is visible if any.",
+  "market_population": "estimated households in their service area. Include city/region name and household count.",
+  "market_competition": "how competitive is their local market? Name 2-3 direct competitors. Is market saturated, growing, or underserved?",
+  "company_struggles": "the real operational and growth problems this business faces based on all research",
+  "marketing_current": "are they currently running paid ads? Search for Meta/Facebook ads, Google PPC, LSA (Local Service Ads), or any other paid marketing. State Yes or No for each channel found active.",
+  "marketing_agencies": "any marketing firms, agencies, or consultants they currently use or have used in the past. Include company names if found.",
+  "email_1_subject": "A subject line for Email 1 that is curiosity-driven, personal, and makes the owner want to open it immediately. Reference something specific you found — their struggle, market, or a competitor. No generic phrases like 'grow your business'.",
+  "email_1": "Write a full pre-call confirmation email FROM Upfrog TO the owner. This owner just scheduled a discovery/strategy call. The email should: (1) Open by referencing something specific you found about their business or market — make it clear we did our homework. (2) Build excitement about what Upfrog does: Upfrog is a demand generation program that uses online price transparency and paid social media ads to capture customers at every stage of the buying process — specifically for HVAC replacement, roofing, garage doors, water treatment, and generators. (3) Connect Upfrog directly to 1-2 specific struggles or gaps you found in their research — low online pricing visibility, declining reviews, heavy competition, etc. (4) Confirm the discovery/strategy call and build anticipation — tell them what they will walk away with from the call. (5) Close warmly and personally using the owner first name. Tone: confident, direct, human — like a trusted advisor, not a salesperson. 3-4 short paragraphs. No fluff.",
+  "email_2_subject": "A subject line for Email 2 that is warm, honest, and positions this as helpful advice — not a rejection.",
+  "email_2": "Write a full email FROM Upfrog TO the owner that kindly and professionally lets them know Upfrog is built for contractors doing over $3M in annual revenue or those ready to invest at least $6,000/month in demand generation. The email should: (1) Thank them genuinely for their time and interest. (2) Be honest that Upfrog may not be the right fit right now based on where they are — do NOT make them feel bad or small. (3) Reference 1 specific positive thing you found about their business to show genuine respect. (4) Briefly explain what Upfrog is and the investment level so they understand the standard. (5) Leave the door open — if they grow or are ready to invest at that level, Upfrog would love to reconnect. (6) Offer 1 genuinely helpful tip or resource relevant to their current situation — a free tool, strategy, or advice based on what you found. Tone: warm, generous, zero pressure. This email should make them like Upfrog even more after reading it.",
+  "email_3_subject": "A subject line for a follow-up email sent 24 hours before the scheduled call — creates urgency and excitement.",
+  "email_3": "Write a short 24-hour reminder email that: (1) Reminds them of the upcoming discovery call tomorrow. (2) Teases 2-3 specific things Upfrog will show them on the call based on what you found about their business and market. (3) Includes a one-liner that makes them feel like this call was made for their exact situation. (4) Keeps it under 150 words. High energy, punchy, confident."
 }`
       }]
     })
