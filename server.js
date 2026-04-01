@@ -30,7 +30,7 @@ async function runResearch(companyName, anthropicKey, context = {}) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-5-20250929',
-      max_tokens: 4000,
+      max_tokens: 5000,
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 4 }],
       messages: [{
         role: 'user',
@@ -72,25 +72,52 @@ IMPORTANT: You MUST return ONLY the JSON object above. No introduction, no expla
   }
 
   const data = await response.json()
-  const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
 
-  // Strip markdown code blocks if present
-  const stripped = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+  // Collect all text from the response (web search results + any text blocks)
+  const allText = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n')
 
-  // Find the outermost JSON object
+  // Try to find JSON directly first
+  const stripped = allText.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
   const start = stripped.indexOf('{')
   const end   = stripped.lastIndexOf('}')
-  if (start === -1 || end === -1) throw new Error('No JSON in response: ' + stripped.slice(0, 200))
 
-  const jsonStr = stripped.slice(start, end + 1)
-  try {
-    return JSON.parse(jsonStr)
-  } catch (e) {
-    // Try to salvage by replacing common issues
-    const fixed = jsonStr
-      .replace(/,\s*}/g, '}')   // trailing commas
-      .replace(/,\s*]/g, ']')   // trailing commas in arrays
-      .replace(/\n/g, '\\n')  // unescaped newlines inside strings
+  if (start !== -1 && end !== -1) {
+    const jsonStr = stripped.slice(start, end + 1)
+    try { return JSON.parse(jsonStr) } catch {}
+  }
+
+  // No valid JSON found — do a second pass asking Claude to write ONLY the JSON
+  // using the search results already gathered as context
+  const contextText = allText.slice(0, 8000) // cap context size
+
+  const pass2 = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+      'x-api-key': anthropicKey,
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-5-20250929',
+      max_tokens: 4000,
+      messages: [{
+        role: 'user',
+        content: `Based on this research about "${companyName}":\n\n${contextText}\n\nNow write ONLY a JSON object with these exact keys. Start with { and end with }. No other text:\n{\n  "industry": "",\n  "ownership": "",\n  "owner_profiles": "",\n  "owner_hobbies": "",\n  "owner_family": "",\n  "pain_points": "",\n  "tech_stack": "",\n  "recent_news": "",\n  "reviews_negative": "",\n  "reviews_positive": "",\n  "reviews_trend": "",\n  "online_pricing": "",\n  "market_population": "",\n  "market_competition": "",\n  "company_struggles": "",\n  "marketing_current": "",\n  "marketing_agencies": "",\n  "email_1_subject": "",\n  "email_1": "",\n  "email_2_subject": "",\n  "email_2": "",\n  "email_3_subject": "",\n  "email_3": ""\n}`
+      }]
+    })
+  })
+
+  const p2data = await pass2.json()
+  const p2text = (p2data.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
+  const p2stripped = p2text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+  const p2start = p2stripped.indexOf('{')
+  const p2end   = p2stripped.lastIndexOf('}')
+  if (p2start === -1 || p2end === -1) throw new Error('No JSON after second pass: ' + p2text.slice(0, 200))
+
+  const p2json = p2stripped.slice(p2start, p2end + 1)
+  try { return JSON.parse(p2json) }
+  catch {
+    const fixed = p2json.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']')
     return JSON.parse(fixed)
   }
 }
