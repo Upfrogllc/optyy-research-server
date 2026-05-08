@@ -19,6 +19,86 @@ function logActivity(entry) {
   console.log(`[${entry.status}] ${entry.company} — ${entry.message || ''}`)
 }
 
+// ── Retry helper: exponential backoff for transient API errors ───────────────
+// Retries on 529 (overloaded), 429 (rate limit), and 5xx errors
+// Backoff: 1s, 2s, 4s, 8s + jitter — total ~15s worst case across 4 attempts
+async function fetchWithRetry(url, options, label, maxRetries = 4) {
+  let lastError
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options)
+
+      // Retry on transient errors
+      if (response.status === 529 || response.status === 429 || response.status >= 500) {
+        const errText = await response.text().catch(() => '')
+        lastError = new Error(`${label} API error ${response.status}: ${errText}`)
+
+        if (attempt === maxRetries - 1) {
+          throw lastError
+        }
+
+        const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500
+        console.log(`[retry] ${label} got ${response.status}, waiting ${Math.round(delay)}ms before attempt ${attempt + 2}/${maxRetries}`)
+        await new Promise(r => setTimeout(r, delay))
+        continue
+      }
+
+      // Non-retryable error (4xx other than 429) — throw immediately
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '')
+        throw new Error(`${label} API error ${response.status}: ${errText}`)
+      }
+
+      return response
+    } catch (err) {
+      // Network errors — retry these too
+      lastError = err
+      if (err.message.includes('API error') && !err.message.match(/(529|429|5\d\d)/)) {
+        // It's a non-retryable HTTP error we already threw above — rethrow
+        throw err
+      }
+      if (attempt === maxRetries - 1) throw err
+      const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500
+      console.log(`[retry] ${label} network error, waiting ${Math.round(delay)}ms before attempt ${attempt + 2}/${maxRetries}: ${err.message}`)
+      await new Promise(r => setTimeout(r, delay))
+    }
+  }
+  throw lastError
+}
+
+// ── Input validation: reject garbage payloads before burning API calls ───────
+function validateResearchInput(companyName, payload) {
+  // Reject empty, undefined, or single-character names
+  if (!companyName || typeof companyName !== 'string') {
+    return { valid: false, reason: 'Missing or invalid company name' }
+  }
+
+  const trimmed = companyName.trim()
+  if (trimmed.length < 2) {
+    return { valid: false, reason: `Company name too short ("${trimmed}") — likely malformed payload` }
+  }
+
+  // Reject obvious test/placeholder values
+  const junkPatterns = [/^test$/i, /^unknown$/i, /^n\/?a$/i, /^null$/i, /^undefined$/i, /^xxx+$/i]
+  if (junkPatterns.some(p => p.test(trimmed))) {
+    return { valid: false, reason: `Company name appears to be placeholder ("${trimmed}")` }
+  }
+
+  // For webhook payloads, require at least some additional context
+  // (email, phone, or a name longer than 3 chars) to avoid researching ghosts
+  if (payload) {
+    const hasEmail = !!(payload.email || payload.contact?.email)
+    const hasPhone = !!(payload.phone || payload.contact?.phone)
+    const hasFullName = !!((payload.first_name || '').trim() && (payload.last_name || '').trim())
+
+    if (trimmed.length < 4 && !hasEmail && !hasPhone && !hasFullName) {
+      return { valid: false, reason: `Insufficient context for research: name="${trimmed}", no email/phone/full name` }
+    }
+  }
+
+  return { valid: true }
+}
+
 // ── Shared: run AI research ───────────────────────────────────────────────────
 async function runResearch(companyName, anthropicKey, context = {}) {
   const contextHints = [
@@ -28,7 +108,7 @@ async function runResearch(companyName, anthropicKey, context = {}) {
   ].filter(Boolean).join(', ')
 
   // ── Step 1: Web search pass — gather raw intelligence ────────────────────
-  const searchRes = await fetch('https://api.anthropic.com/v1/messages', {
+  const searchRes = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': anthropicKey },
     body: JSON.stringify({
@@ -50,14 +130,13 @@ Run these searches:
 Report everything found in detail. Include direct review quotes. Note specifically: are they running Meta/Facebook ads, Google PPC, or LSA? Name any marketing agencies found.`
       }]
     })
-  })
+  }, 'Search')
 
-  if (!searchRes.ok) throw new Error(`Search API error ${searchRes.status}: ${await searchRes.text()}`)
   const searchData = await searchRes.json()
   const notes = (searchData.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n')
 
   // ── Step 2: JSON + email writing pass — no web search, just synthesize ──
-  const jsonRes = await fetch('https://api.anthropic.com/v1/messages', {
+  const jsonRes = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': anthropicKey },
     body: JSON.stringify({
@@ -100,9 +179,8 @@ Return ONLY valid JSON starting with { and ending with }. No markdown, no explan
 }`
       }]
     })
-  })
+  }, 'JSON')
 
-  if (!jsonRes.ok) throw new Error(`JSON API error ${jsonRes.status}: ${await jsonRes.text()}`)
   const jsonData = await jsonRes.json()
   const raw = (jsonData.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
 
@@ -117,6 +195,7 @@ Return ONLY valid JSON starting with { and ending with }. No markdown, no explan
     return JSON.parse(fixed)
   }
 }
+
 // ── Shared: build note body ───────────────────────────────────────────────────
 function buildNote(companyName, d) {
   const now = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -237,6 +316,28 @@ app.get('/activity', (req, res) => {
   res.json({ events: activityLog })
 })
 
+// ── GET /health — uptime monitoring endpoint ─────────────────────────────────
+// Hit this from UptimeRobot or similar to detect outages immediately
+app.get('/health', (req, res) => {
+  const hasAnthropicKey = !!process.env.ANTHROPIC_API_KEY
+  const hasGhlKey       = !!process.env.GHL_API_KEY
+  const hasLocationId   = !!process.env.GHL_LOCATION_ID
+
+  const healthy = hasAnthropicKey && hasGhlKey && hasLocationId
+
+  res.status(healthy ? 200 : 503).json({
+    status: healthy ? 'ok' : 'degraded',
+    uptime_seconds: Math.floor(process.uptime()),
+    activity_count: activityLog.length,
+    env: {
+      anthropic_key: hasAnthropicKey,
+      ghl_key: hasGhlKey,
+      location_id: hasLocationId
+    },
+    timestamp: new Date().toISOString()
+  })
+})
+
 // ── POST /research — manual research from OPTYy app ──────────────────────────
 app.post('/research', async (req, res) => {
   const anthropicKey = process.env.ANTHROPIC_API_KEY
@@ -244,6 +345,12 @@ app.post('/research', async (req, res) => {
 
   const { research_company, email, phone } = req.body
   if (!research_company) return res.status(400).json({ error: 'research_company is required' })
+
+  // Validate input — reject garbage before burning API calls
+  const validation = validateResearchInput(research_company, null)
+  if (!validation.valid) {
+    return res.status(400).json({ error: validation.reason })
+  }
 
   // Extract domain from email for better company identification
   const domain = email ? email.split('@')[1] : null
@@ -277,6 +384,20 @@ app.post('/webhook', async (req, res) => {
 
   if (!contactId) {
     return res.status(400).json({ error: 'No contact_id in webhook payload' })
+  }
+
+  // Validate the research target before doing anything expensive
+  const validation = validateResearchInput(companyName, payload)
+  if (!validation.valid) {
+    logActivity({
+      status: 'skipped',
+      company: companyName,
+      contactId,
+      email,
+      phone,
+      message: `Skipped: ${validation.reason}`
+    })
+    return res.json({ status: 'skipped', reason: validation.reason, contactId, companyName })
   }
 
   // Log receipt immediately
@@ -323,7 +444,7 @@ app.post('/webhook', async (req, res) => {
   })()
 })
 
-// ── Health check ──────────────────────────────────────────────────────────────
+// ── Health check (root) ───────────────────────────────────────────────────────
 app.get('/', (req, res) => res.json({ status: 'OPTYy Research Server running', events: activityLog.length }))
 
 const PORT = process.env.PORT || 3000
