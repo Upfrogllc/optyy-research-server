@@ -1,0 +1,81 @@
+name: Research and tag safety checks
+on:
+  pull_request:
+  push:
+    branches: [main, fix/research-fable51-preserve-tags-20261012]
+permissions:
+  contents: read
+concurrency:
+  group: researcher-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check server.js
+      - run: npm test
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Real Express startup and health routing without external calls
+        run: |
+          node - <<'JS'
+          const assert = require('node:assert/strict');
+          const {app} = require('./server');
+          const server = app.listen(0, '127.0.0.1', async () => {
+            try {
+              const response = await fetch('http://127.0.0.1:'+server.address().port+'/health');
+              assert.equal(response.status,503);
+              const value=await response.json();
+              assert.equal(value.research_model,'claude-fable-5-1');
+              assert.equal(value.example_emails,false);
+              assert.equal(value.tag_mode,'additive');
+            } catch(error) {console.error(error);process.exitCode=1;}
+            finally {server.close();}
+          });
+          JS
+  deployed-model:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Wait for existing Railway service and run one research-only check
+        run: |
+          python3 - <<'PY'
+          import urllib.request,urllib.error,json,time
+          base='https://optyy-research-server-production.up.railway.app'
+          for attempt in range(30):
+            try:
+              with urllib.request.urlopen(base+'/health',timeout=15) as r:
+                value=json.load(r)
+              assert value.get('research_revision')=='fable51-research-only-additive-tags-v1'
+              assert value.get('research_model')=='claude-fable-5-1' and value.get('example_emails') is False and value.get('tag_mode')=='additive'
+              print('PASS deployed configuration',flush=True)
+              break
+            except Exception:
+              time.sleep(8)
+          else:
+            raise RuntimeError('Updated Railway deployment was not observed.')
+          # This existing endpoint only returns research: no contact ID, notes,
+          # tags, messages, workflows or appointments are created. No customer
+          # PII or API keys are sent to this workflow or logged by this check.
+          data=json.dumps({'research_company':'Carrier Global Corporation'}).encode()
+          req=urllib.request.Request(base+'/research',data=data,headers={'Content-Type':'application/json'},method='POST')
+          try:
+            with urllib.request.urlopen(req,timeout=360) as response:
+              report=json.load(response).get('result',{})
+          except urllib.error.HTTPError as error:
+            detail=error.read().decode()[:500]
+            raise RuntimeError('Research-only model check failed (HTTP '+str(error.code)+'): '+detail)
+          assert report.get('research_model')=='claude-fable-5-1'
+          assert isinstance(report.get('industry'),str) and report['industry']
+          assert isinstance(report.get('sources'),list) and report['sources']
+          assert not any(key.startswith('email_') for key in report)
+          print(json.dumps({'liveResearch':'passed','model':report['research_model'],'sourceCount':len(report['sources']),'exampleEmailFields':False,'CRMRequests':0}))
+          PY
