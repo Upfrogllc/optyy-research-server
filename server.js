@@ -1,7 +1,7 @@
 const express = require('express')
 const app = express()
 const RESEARCH_MODEL = 'claude-fable-5-1'
-const RESEARCH_REVISION = 'fable51-research-only-additive-tags-v1'
+const RESEARCH_REVISION = 'mobile-spaced-brief-v3'
 const RESEARCH_FIELDS = [
   'industry', 'ownership', 'owner_profiles', 'owner_hobbies', 'owner_family',
   'pain_points', 'tech_stack', 'recent_news', 'reviews_negative', 'reviews_positive',
@@ -183,30 +183,60 @@ Investigate its official site, services, locations, ownership and company backgr
 }
 
 function buildNote(companyName, d) {
-  const strip = value => String(value || 'Not verified')
+  // GHL notes are plain text on mobile: use separate headings, short lines and spacing.
+  const clean = value => String(value || '')
     .replace(/\[([^\]]+)\]\(https?:\/\/[^)]+\)/g, '$1')
-    .replace(/https?:\/\/[^\s)]+/g, '')
+    .replace(/https?:\/\/[^\s)\];]+/g, '')
+    .replace(/\([^)]*(?:source|citation|http)[^)]*\)/gi, '')
     .replace(/\s+/g, ' ').trim()
-  const short = (value, max = 250) => {
-    const v = strip(value)
-    return v.length <= max ? v : v.slice(0, max - 3).trimEnd() + '...'
+  const sentences = (value, max = 220) => {
+    const t = clean(value)
+    if (!t || /^not verified\b/i.test(t)) return 'Not verified'
+    if (t.length <= max) return t
+    const parts = t.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || []
+    let out = ''
+    for (const part of parts) {
+      if ((out + part).length > max) break
+      out += part
+    }
+    return out.trim() || t.slice(0, max).replace(/\s+\S*$/, '').trim() + '…'
   }
-  const sources = [...new Set((d.sources || []).map(x => sourceUrl(x.url)).filter(Boolean))].slice(0, 4)
+  const wrap = (value, width = 56) => {
+    const words = value.split(/\s+/)
+    const lines = []
+    let line = ''
+    for (const word of words) {
+      if (line && (line + ' ' + word).length > width) {
+        lines.push(line)
+        line = word
+      } else line += (line ? ' ' : '') + word
+    }
+    if (line) lines.push(line)
+    return lines.join('\n')
+  }
+  const section = (heading, value, max) =>
+    heading + '\n' + wrap(sentences(value, max))
+  const sources = [...new Set((d.sources || [])
+    .map(x => sourceUrl(x.url)).filter(Boolean))].slice(0, 4)
   return [
-    'OPTYy BUSINESS BRIEF',
+    'OPTYy  |  BUSINESS BRIEF',
     'Researched: ' + (d.researched_at || 'Unknown'),
     '',
-    'BUSINESS: ' + short(companyName, 90),
-    'BUSINESS & SIZE: ' + short(d.industry, 350),
-    'OWNER: ' + short(d.ownership, 220),
-    'BACKGROUND: ' + short(d.owner_profiles, 180),
-    'REVIEWS: ' + short(d.reviews_positive, 180),
+    'BUSINESS',
+    wrap(clean(companyName) || 'Not verified'),
     '',
-    'SALES CALL INSIGHTS',
-    short(d.pain_points, 280),
+    section('SERVICES & SIZE', d.industry, 280),
+    '',
+    section('OWNER / MANAGEMENT', d.ownership, 180),
+    '',
+    section('COMPANY BACKGROUND', d.owner_profiles, 150),
+    '',
+    section('CUSTOMER REVIEWS', d.reviews_positive, 170),
+    '',
+    section('SALES CALL INSIGHTS', d.pain_points, 200),
     '',
     'SOURCES',
-    ...(sources.length ? sources : ['Not verified'])
+    ...(sources.length ? sources.map((url, i) => (i + 1) + '. ' + url) : ['Not verified'])
   ].join('\n')
 }
 
